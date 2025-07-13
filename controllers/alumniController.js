@@ -1,31 +1,53 @@
+
+
 // controllers/alumniController.js
+import path from 'path';
+import fs from 'fs/promises';
+import { v4 as uuidv4 } from 'uuid';
 import { initDB } from '../db/database.js';
 import { minioClient } from '../utils/minioClient.js';
-import { v4 as uuidv4 } from 'uuid';
-import fs from 'fs/promises';
+
+const LOCAL_SELFIE_DIR = path.resolve('uploads/selfies');   // adjust if you want another folder
 
 export const registerAlumni = async (req, res, next) => {
   try {
-    /* --------- field + file validation (unchanged) --------- */
-
+    /* ------------------------------------------------------- *
+     * 1.  Basic field + file validation (unchanged)           *
+     * ------------------------------------------------------- */
     const { name, email, phone, graduationYear, department, job } = req.body;
     const { originalname, path: tmpPath } = req.file;
 
-    /* --------- duplicate‑email check --------- */
+    /* ------------------------------------------------------- *
+     * 2.  Duplicate‑email check                               *
+     * ------------------------------------------------------- */
     const db = await initDB();
     const existing = await db.get('SELECT id FROM alumni WHERE email = ?', email);
     if (existing) {
-      await fs.unlink(tmpPath);          // clean up uploaded file
+      await fs.unlink(tmpPath);                    // clean temp file
       return res.status(409).json({ error: 'Email already registered' });
     }
 
-    /* --------- upload selfie (unchanged) --------- */
-    const selfieName = `${uuidv4()}_${originalname}`;
-    await minioClient.putObject('selfies', selfieName, await fs.readFile(tmpPath));
-    await fs.unlink(tmpPath);
+    /* ------------------------------------------------------- *
+     * 3.  Prepare local storage                               *
+     * ------------------------------------------------------- */
+    await fs.mkdir(LOCAL_SELFIE_DIR, { recursive: true });   // create folder if missing
+
+    const selfieName       = `${uuidv4()}_${originalname}`;
+    const localSelfiePath  = path.join(LOCAL_SELFIE_DIR, selfieName);
+
+    // Move the temp file → permanent local folder (cheap on the same FS)
+    await fs.rename(tmpPath, localSelfiePath);
+
+    /* ------------------------------------------------------- *
+     * 4.  Upload to MinIO                                     *
+     * ------------------------------------------------------- */
+    await minioClient.putObject('selfies', selfieName, await fs.readFile(localSelfiePath));
+
     const selfieUrl = `${process.env.MINIO_PUBLIC_URL}/selfies/${selfieName}`;
 
-    /* --------- insert row --------- */
+    /* ------------------------------------------------------- *
+     * 5.  Insert new row                                      *
+     * ------------------------------------------------------- */
     await db.run(
       `INSERT INTO alumni (name, email, phone, graduationYear, department, job, selfieUrl)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -35,20 +57,31 @@ export const registerAlumni = async (req, res, next) => {
     const inserted = await db.get(
       'SELECT last_insert_rowid() AS id, createdAt FROM alumni WHERE id = last_insert_rowid()'
     );
-    res.json({
-      message: 'Registration successful',
+
+    return res.json({
+      message  : 'Registration successful',
       selfieUrl,
-      id: inserted.id,
+      id       : inserted.id,
       createdAt: inserted.createdAt,
+      // You still compute submittedAt on the client; keep it if you need it
     });
   } catch (err) {
-    /* fallback if UNIQUE constraint still triggers (race condition) */
+    /* ------------------------------------------------------- *
+     * 6.  Graceful error handling                             *
+     * ------------------------------------------------------- */
     if (err?.code === 'SQLITE_CONSTRAINT') {
       return res.status(409).json({ error: 'Email already registered' });
     }
+
+    // If something failed after we moved the file, avoid orphaning it
+    if (req.file?.path) {                    // Multer temp still there
+      fs.unlink(req.file.path).catch(() => {});
+    }
+
     next(err);
   }
 };
+
 
 
 export const getProfile = async (req, res, next) => {
