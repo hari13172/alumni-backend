@@ -9,7 +9,7 @@ export const initDB = async () => {
 
   await db.exec(`
     CREATE TABLE IF NOT EXISTS alumni (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      id TEXT PRIMARY KEY, -- UUID
       name TEXT,
       email TEXT UNIQUE,
       phone TEXT,
@@ -23,7 +23,7 @@ export const initDB = async () => {
     );
 
     CREATE TABLE IF NOT EXISTS admins (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      id TEXT PRIMARY KEY, -- UUID
       username TEXT,
       password TEXT,
       createdAt TIMESTAMP DEFAULT (datetime('now', 'localtime')),

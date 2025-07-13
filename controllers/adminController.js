@@ -1,6 +1,7 @@
 import { initDB } from '../db/database.js';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
+import { v4 as uuidv4 } from 'uuid';
 
 export const loginAdmin = async (req, res) => {
   const { username, password } = req.body;
@@ -18,9 +19,10 @@ const createAdmin = async () => {
   const username = 'hari';
   const plainPassword = 'Hari@123';
   const hashedPassword = await bcrypt.hash(plainPassword, 10);
-
+  const newId = uuidv4();
   await db.run(
-    `INSERT INTO admins (username, password) VALUES (?, ?)`,
+    `INSERT INTO admins (id, username, password) VALUES (? ,?, ?)`,
+    newId,
     username,
     hashedPassword
   );

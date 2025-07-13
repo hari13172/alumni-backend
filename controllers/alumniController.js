@@ -12,7 +12,7 @@ import { minioClient } from '../utils/minioClient.js';
 export const registerAlumni = async (req, res, next) => {
   try {
     const { name, email, phone, graduationYear, department, job } = req.body;
-    const { originalname, path: tmpPath, mimetype } = req.file;   // ← mimetype comes from Multer
+    const { originalname, path: tmpPath, mimetype } = req.file;
 
     const db = await initDB();
     if (await db.get("SELECT id FROM alumni WHERE email = ?", email)) {
@@ -20,46 +20,30 @@ export const registerAlumni = async (req, res, next) => {
       return res.status(409).json({ error: "Email already registered" });
     }
 
-    /* -------------------------------------------------- *
-     * 1.  Prepare object key & read file once            *
-     * -------------------------------------------------- */
-    const selfieKey   = `${uuidv4()}_${originalname}`;   // a.k.a. object name
-    const selfieBuf   = await fs.readFile(tmpPath);      // <Buffer ...>
-    await fs.unlink(tmpPath);                            // clean temp immediately
+    const selfieKey   = `${uuidv4()}_${originalname}`;
+    const selfieBuf   = await fs.readFile(tmpPath);
+    await fs.unlink(tmpPath);
 
-    /* -------------------------------------------------- *
-     * 2.  Push to MinIO                                  *
-     * -------------------------------------------------- */
     await minioClient.putObject("selfies", selfieKey, selfieBuf);
 
-    /* -------------------------------------------------- *
-     * 3.  Build URL + data‑url                           *
-     * -------------------------------------------------- */
-    const selfieUrl      = `/api/alumni/selfie/${selfieKey}`;  // backend proxy route
+    const selfieUrl      = `/api/alumni/selfie/${selfieKey}`;
     const selfieDataUrl  = `data:${mimetype};base64,${selfieBuf.toString("base64")}`;
 
-    /* -------------------------------------------------- *
-     * 4.  Insert row (now with selfieKey)                *
-     * -------------------------------------------------- */
+    const newId = uuidv4();
     await db.run(
       `INSERT INTO alumni
-         (name, email, phone, graduationYear, department, job, selfieKey, selfieUrl)
+         (id, name, email, phone, graduationYear, department, job, selfieKey, selfieUrl)
        VALUES
-         (?,    ?,     ?,    ?,             ?,          ?,   ?,         ?)`,
-      name, email, phone, graduationYear, department, job, selfieKey, selfieUrl
+         (? , ?,    ?,     ?,    ?,             ?,          ?,   ?,         ?)`,
+      newId, name, email, phone, graduationYear, department, job, selfieKey, selfieUrl
     );
 
-    const id = (await db.get("SELECT last_insert_rowid() AS id")).id;
-
-    /* -------------------------------------------------- *
-     * 5.  Respond                                        *
-     * -------------------------------------------------- */
     res.json({
       message: "Registration successful",
-      id,
-      selfieKey,             // stored key
-      selfieUrl,             // backend path
-      selfieDataUrl          // base‑64 data‑URL for instant preview
+      id: newId,
+      selfieKey,
+      selfieUrl,
+      selfieDataUrl
     });
   } catch (err) {
     next(err);
