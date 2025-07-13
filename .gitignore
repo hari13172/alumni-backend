@@ -1,0 +1,8 @@
+# .gitignore file for a Node.js project
+.env
+
+db/
+
+node_modules/
+
+minio_data/
