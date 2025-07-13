@@ -5,7 +5,7 @@ import alumniRoutes from './routes/alumni.js';
 import adminRoutes from './routes/admin.js';
 import qrRoutes from './routes/qr.js';
 import http from 'http';
-import path from 'path';
+
 
 dotenv.config();
 
@@ -16,7 +16,6 @@ app.use(express.json());
 app.use('/api/alumni', alumniRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/qr', qrRoutes);
-app.use('/static', express.static(path.resolve('uploads')));
 
 
 

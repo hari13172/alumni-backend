@@ -12,18 +12,20 @@ export const minioClient = new Client({
 });
 // Function to create bucket
 async function createBucket(bucketName, region = 'us-east-1') {
-  try {
-    const exists = await minioClient.bucketExists(bucketName);
-    if (!exists) {
-      await minioClient.makeBucket(bucketName, region);
-      console.log(`✅ Bucket "${bucketName}" created successfully.`);
-    } else {
-      console.log(`ℹ️ Bucket "${bucketName}" already exists.`);
+  for (let attempt = 1; attempt <= 5; attempt++) {
+    try {
+      const exists = await minioClient.bucketExists(bucketName);
+      if (!exists) {
+        await minioClient.makeBucket(bucketName, region);
+        console.log(`✅ Bucket "${bucketName}" created successfully.`);
+      } else {
+        console.log(`ℹ️ Bucket "${bucketName}" already exists.`);
+      }
+      break;
+    } catch (err) {
+      console.error(`⏳ Attempt ${attempt}: Failed to create bucket`, err.message);
+      await new Promise((res) => setTimeout(res, 3000)); // wait 3 seconds
     }
-  } catch (err) {
-    console.error('❌ Error creating bucket:', err);
   }
 }
 
-// Example usage
-createBucket('selfies');

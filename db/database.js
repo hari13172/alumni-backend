@@ -17,6 +17,7 @@ export const initDB = async () => {
       department TEXT,
       job TEXT,
       selfieUrl TEXT,
+      selfieKey TEXT,
       createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       updatedAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );

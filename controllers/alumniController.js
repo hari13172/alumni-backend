@@ -6,81 +6,67 @@ import fs from 'fs/promises';
 import { v4 as uuidv4 } from 'uuid';
 import { initDB } from '../db/database.js';
 import { minioClient } from '../utils/minioClient.js';
+// adjust if you want another folder
 
-const LOCAL_SELFIE_DIR = path.resolve('uploads/selfies');   // adjust if you want another folder
-
+/* -------------------------------- REGISTER -------------------------------- */
 export const registerAlumni = async (req, res, next) => {
   try {
-    /* ------------------------------------------------------- *
-     * 1.  Basic field + file validation (unchanged)           *
-     * ------------------------------------------------------- */
     const { name, email, phone, graduationYear, department, job } = req.body;
-    const { originalname, path: tmpPath } = req.file;
+    const { originalname, path: tmpPath, mimetype } = req.file;   // ← mimetype comes from Multer
 
-    /* ------------------------------------------------------- *
-     * 2.  Duplicate‑email check                               *
-     * ------------------------------------------------------- */
     const db = await initDB();
-    const existing = await db.get('SELECT id FROM alumni WHERE email = ?', email);
-    if (existing) {
-      await fs.unlink(tmpPath);                    // clean temp file
-      return res.status(409).json({ error: 'Email already registered' });
+    if (await db.get("SELECT id FROM alumni WHERE email = ?", email)) {
+      await fs.unlink(tmpPath);
+      return res.status(409).json({ error: "Email already registered" });
     }
 
-    /* ------------------------------------------------------- *
-     * 3.  Prepare local storage                               *
-     * ------------------------------------------------------- */
-    await fs.mkdir(LOCAL_SELFIE_DIR, { recursive: true });   // create folder if missing
+    /* -------------------------------------------------- *
+     * 1.  Prepare object key & read file once            *
+     * -------------------------------------------------- */
+    const selfieKey   = `${uuidv4()}_${originalname}`;   // a.k.a. object name
+    const selfieBuf   = await fs.readFile(tmpPath);      // <Buffer ...>
+    await fs.unlink(tmpPath);                            // clean temp immediately
 
-    const selfieName       = `${uuidv4()}_${originalname}`;
-    const localSelfiePath  = path.join(LOCAL_SELFIE_DIR, selfieName);
+    /* -------------------------------------------------- *
+     * 2.  Push to MinIO                                  *
+     * -------------------------------------------------- */
+    await minioClient.putObject("selfies", selfieKey, selfieBuf);
 
-    // Move the temp file → permanent local folder (cheap on the same FS)
-    await fs.rename(tmpPath, localSelfiePath);
+    /* -------------------------------------------------- *
+     * 3.  Build URL + data‑url                           *
+     * -------------------------------------------------- */
+    const selfieUrl      = `/api/alumni/selfie/${selfieKey}`;  // backend proxy route
+    const selfieDataUrl  = `data:${mimetype};base64,${selfieBuf.toString("base64")}`;
 
-    /* ------------------------------------------------------- *
-     * 4.  Upload to MinIO                                     *
-     * ------------------------------------------------------- */
-    await minioClient.putObject('selfies', selfieName, await fs.readFile(localSelfiePath));
-
-    const selfieUrl = `${process.env.MINIO_PUBLIC_URL}/selfies/${selfieName}`;
-
-    /* ------------------------------------------------------- *
-     * 5.  Insert new row                                      *
-     * ------------------------------------------------------- */
+    /* -------------------------------------------------- *
+     * 4.  Insert row (now with selfieKey)                *
+     * -------------------------------------------------- */
     await db.run(
-      `INSERT INTO alumni (name, email, phone, graduationYear, department, job, selfieUrl)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      name, email, phone, graduationYear, department, job, selfieUrl
+      `INSERT INTO alumni
+         (name, email, phone, graduationYear, department, job, selfieKey, selfieUrl)
+       VALUES
+         (?,    ?,     ?,    ?,             ?,          ?,   ?,         ?)`,
+      name, email, phone, graduationYear, department, job, selfieKey, selfieUrl
     );
 
-    const inserted = await db.get(
-      'SELECT last_insert_rowid() AS id, createdAt FROM alumni WHERE id = last_insert_rowid()'
-    );
+    const id = (await db.get("SELECT last_insert_rowid() AS id")).id;
 
-    return res.json({
-      message  : 'Registration successful',
-      selfieUrl,
-      id       : inserted.id,
-      createdAt: inserted.createdAt,
-      // You still compute submittedAt on the client; keep it if you need it
+    /* -------------------------------------------------- *
+     * 5.  Respond                                        *
+     * -------------------------------------------------- */
+    res.json({
+      message: "Registration successful",
+      id,
+      selfieKey,             // stored key
+      selfieUrl,             // backend path
+      selfieDataUrl          // base‑64 data‑URL for instant preview
     });
   } catch (err) {
-    /* ------------------------------------------------------- *
-     * 6.  Graceful error handling                             *
-     * ------------------------------------------------------- */
-    if (err?.code === 'SQLITE_CONSTRAINT') {
-      return res.status(409).json({ error: 'Email already registered' });
-    }
-
-    // If something failed after we moved the file, avoid orphaning it
-    if (req.file?.path) {                    // Multer temp still there
-      fs.unlink(req.file.path).catch(() => {});
-    }
-
     next(err);
   }
 };
+
+
 
 
 
@@ -89,15 +75,15 @@ export const getProfile = async (req, res, next) => {
     const { id } = req.params;
     const db = await initDB();
     const alumni = await db.get('SELECT * FROM alumni WHERE id = ?', id);
-    
+
     if (!alumni) {
       return res.status(404).json({ error: 'Alumni not found' });
     }
 
     // Convert SQLite timestamp to ISO UTC string
     const createdAt = alumni.createdAt
-  ? new Date(alumni.createdAt + 'Z').toISOString()
-  : new Date().toISOString();  // Ensures it's treated as UTC
+      ? new Date(alumni.createdAt + 'Z').toISOString()
+      : new Date().toISOString();  // Ensures it's treated as UTC
 
     const responseData = {
       ...alumni,
@@ -110,6 +96,8 @@ export const getProfile = async (req, res, next) => {
     next(err);
   }
 };
+
+
 
 /* -------------------------------------------------------------------------- */
 /*                               UPDATE PROFILE                               */
@@ -133,15 +121,16 @@ export const updateProfile = async (req, res, next) => {
       await minioClient.putObject('selfies', selfieName, await fs.readFile(req.file.path));
       await fs.unlink(req.file.path);
 
-      updates.selfieUrl = `${process.env.MINIO_PUBLIC_URL}/selfies/${selfieName}`;
+      // Replace DB field with backend URL
+      updates.selfieUrl = `/api/alumni/selfie/${selfieName}`;
 
+      // Delete old object in MinIO (optional but neat)
       if (existing.selfieUrl) {
         const oldKey = existing.selfieUrl.split('/').pop();
-        if (oldKey) {
-          minioClient.removeObject('selfies', oldKey).catch(() => {});
-        }
+        minioClient.removeObject('selfies', oldKey).catch(() => { });
       }
     }
+
 
     if (Object.keys(updates).length === 0)
       return res.status(400).json({ error: 'No valid fields provided for update' });
