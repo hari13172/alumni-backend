@@ -23,4 +23,19 @@ router.get('/alumni', verifyAdmin, async (req, res) => {
   }
 });
 
+router.delete('/alumni/:id', verifyAdmin, async (req, res) => {
+  const { id } = req.params;
+  try {
+    const db = await initDB();
+    const result = await db.run('DELETE FROM alumni WHERE id = ?', id);
+    if (result.changes === 0) {
+      return res.status(404).json({ error: 'Alumni not found' });
+    }
+    res.json({ message: 'Alumni deleted successfully' });
+  } catch (error) {
+    console.error('❌ DB delete error:', error.message);
+    res.status(500).json({ error: 'Server error', details: error.message });
+  }
+});
+
 export default router;
