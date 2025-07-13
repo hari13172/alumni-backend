@@ -29,3 +29,4 @@ async function createBucket(bucketName, region = 'us-east-1') {
   }
 }
 
+createBucket('selfies')
